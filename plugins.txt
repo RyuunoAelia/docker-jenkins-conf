@@ -44,6 +44,7 @@ github-api:1.85
 github-branch-source:2.0.4
 github-organization-folder:1.6
 github:1.26.1
+gogs-webhook:1.0.10
 groovy:1.30
 handlebars:1.1.1
 hipchat:2.1.1

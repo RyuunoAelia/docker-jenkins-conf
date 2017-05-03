@@ -88,11 +88,11 @@ resolveDependencies() {
     dependencies="$(unzip -p "$jpi" META-INF/MANIFEST.MF | tr -d '\r' | tr '\n' '|' | sed -e 's#| ##g' | tr '|' '\n' | grep "^Plugin-Dependencies: " | sed -e 's#^Plugin-Dependencies: ##')"
 
     if [[ ! $dependencies ]]; then
-        echo " > $plugin has no dependencies"
+        #echo " > $plugin has no dependencies"
         return
     fi
 
-    echo " > $plugin depends on $dependencies"
+    #echo " > $plugin depends on $dependencies"
 
     IFS=',' read -r -a array <<< "$dependencies"
 
@@ -100,7 +100,7 @@ resolveDependencies() {
     do
         plugin="$(cut -d':' -f1 - <<< "$d")"
         if [[ $d == *"resolution:=optional"* ]]; then
-            echo "Skipping optional dependency $plugin"
+            : #echo "Skipping optional dependency $plugin"
         else
             local pluginInstalled
             if pluginInstalled="$(echo "${bundledPlugins}" | grep "^${plugin}:")"; then
@@ -110,8 +110,8 @@ resolveDependencies() {
                 if versionLT "${versionInstalled}" "${minVersion}"; then
                     echo "Upgrading bundled dependency $d ($minVersion > $versionInstalled)"
                     download "$plugin" &
-                else
-                    echo "Skipping already bundled dependency $d ($minVersion <= $versionInstalled)"
+                #else
+                    #echo "Skipping already bundled dependency $d ($minVersion <= $versionInstalled)"
                 fi
             else
                 download "$plugin" &
