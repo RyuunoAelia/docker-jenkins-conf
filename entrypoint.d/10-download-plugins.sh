@@ -159,30 +159,6 @@ installedPlugins() {
     done
 }
 
-downloadPlugins() {
-    echo "Downloading plugins..."
-    for plugin in "$@"; do
-        version=""
-
-        if [[ $plugin =~ .*:.* ]]; then
-            version=$(versionFromPlugin "${plugin}")
-            plugin="${plugin%%:*}"
-        fi
-
-        download "$plugin" "$version" "true" &
-    done
-}
-
-installPlugins() {
-    echo
-    echo "WAR bundled plugins:"
-    echo "${bundledPlugins}"
-    echo
-    echo "Installed plugins:"
-    installedPlugins
-
-}
-
 main() {
     local plugin version
 
@@ -197,10 +173,25 @@ main() {
     echo "Analyzing war..."
     bundledPlugins="$(bundledPlugins)"
 
-    downloadPlugins $@
+    echo "Downloading plugins..."
+    for plugin in "$@"; do
+        version=""
+
+        if [[ $plugin =~ .*:.* ]]; then
+            version=$(versionFromPlugin "${plugin}")
+            plugin="${plugin%%:*}"
+        fi
+
+        download "$plugin" "$version" "true" &
+    done
     wait
 
-    installPlugins
+    echo
+    echo "WAR bundled plugins:"
+    echo "${bundledPlugins}"
+    echo
+    echo "Installed plugins:"
+    installedPlugins
 
     if [[ -f $FAILED ]]; then
         echo "Some plugins failed to download!" "$(<"$FAILED")" >&2
