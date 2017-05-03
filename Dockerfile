@@ -1,36 +1,74 @@
 FROM openjdk:8-jdk
 
-VOLUME ["/var/jenkins_home/init.groovy.d"]
-VOLUME ["/var/jenkins_home/job-dsl-scripts"]
-VOLUME ["/var/jenkins_home/.keystore"]
-VOLUME ["/var/jenkins_home/plugins"]
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 
-ENV JENKINS_VERSION=2.46.1
+ENV JENKINS_HOME /var/jenkins_home
+ENV JENKINS_SLAVE_AGENT_PORT 50000
 
-RUN mkdir -p /usr/local/bin/ \
-  && mkdir -p /usr/share/jenkins
 
-# Download jenkins war of current jenkins version to determine the included plugins
-RUN curl -fsSLO https://updates.jenkins-ci.org/download/war/$JENKINS_VERSION/jenkins.war \
-  && cp jenkins.war /usr/share/jenkins \
-  && rm -f jenkins.war
+ARG user=jenkins
+ARG group=jenkins
+ARG uid=1000
+ARG gid=1000
 
-ADD init.groovy.d/*.groovy /var/jenkins_home/init.groovy.d/
-ADD job-dsl-scripts/* /var/jenkins_home/job-dsl-scripts/
-ADD jenkins-support /usr/local/bin/
-ADD install-plugins.sh /usr/local/bin/
-ADD plugins.txt /
-ADD import-crt.sh /
-ADD entrypoint.sh /
 
-RUN chmod +x /usr/local/bin/install-plugins.sh \
-  && chmod +x /import-crt.sh \
-  && chmod +x /entrypoint.sh \
-  && chown -R 1000.1000 /var/jenkins_home/init.groovy.d \
-  && chown -R 1000.1000 /var/jenkins_home/job-dsl-scripts \
-  && chown -R 1000.1000 /var/jenkins_home/plugins
+# Jenkins is run with user `jenkins`, uid = 1000
+# If you bind mount a volume from the host or a data container,
+# ensure you use the same uid
+RUN groupadd -g ${gid} ${group} \
+	&& useradd -d "$JENKINS_HOME" -u ${uid} -g ${gid} -m -s /bin/bash ${user}
 
-RUN export JENKINS_UC="http://updates.jenkins-ci.org" \
-  && /usr/local/bin/install-plugins.sh $(cat ./plugins.txt)
 
-ENTRYPOINT [ "/entrypoint.sh" ]
+# Jenkins home directory is a volume, so configuration and build history 
+# can be persisted and survive image upgrades
+VOLUME /var/jenkins_home
+
+ENV TINI_VERSION=0.14.0 \
+	TINI_SHA=6c41ec7d33e857d4779f14d9c74924cab0c7973485d2972419a3b7c7620ff5fd
+
+# Use tini as subreaper in Docker container to adopt zombie processes 
+RUN curl -fsSL https://github.com/krallin/tini/releases/download/v${TINI_VERSION}/tini-static-amd64 -o /bin/tini && chmod +x /bin/tini \
+	&& echo "$TINI_SHA  /bin/tini" | sha256sum -c -
+
+
+# jenkins version being bundled in this docker image
+ARG JENKINS_VERSION=2.46.2
+ENV JENKINS_VERSION ${JENKINS_VERSION:-2.46.2}
+
+# jenkins.war checksum, download will be validated using it
+ARG JENKINS_SHA=aa7f243a4c84d3d6cfb99a218950b8f7b926af7aa2570b0e1707279d464472c7
+
+# Can be used to customize where jenkins.war get downloaded from
+ARG JENKINS_URL=http://mirrors.jenkins.io/war-stable/${JENKINS_VERSION}/jenkins.war
+
+RUN mkdir -p /usr/share/jenkins/ref
+
+# could use ADD but this one does not check Last-Modified header neither does it allow to control checksum
+# see https://github.com/docker/docker/issues/8331
+RUN curl -fsSL ${JENKINS_URL} -o /usr/share/jenkins/jenkins.war \
+	&& echo "${JENKINS_SHA}  /usr/share/jenkins/jenkins.war" | sha256sum -c -
+
+
+ENV JENKINS_UC https://updates.jenkins.io
+RUN chown -R ${user} "$JENKINS_HOME"
+
+# for main web interface:
+EXPOSE 8080
+
+# will be used by attached slave agents:
+EXPOSE 50000
+
+COPY ./entrypoint.sh /
+COPY ./entrypoint.d /entrypoint.d
+COPY ./jenkins-support /usr/local/bin/jenkins-support
+COPY ./job-dsl-scripts /usr/share/jenkins/ref/job-dsl-scripts
+
+COPY plugins.txt /
+RUN export JENKINS_UC="http://updates.jenkins-ci.org" JENKINS_PLUGINS="$(cat /plugins.txt)"\
+	&& /entrypoint.d/10-download-plugins.sh
+
+USER ${user}
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+WORKDIR ${JENKINS_HOME}
