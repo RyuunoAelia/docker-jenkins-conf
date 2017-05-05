@@ -5,10 +5,7 @@ import hudson.slaves.*
 import hudson.FilePath
 
 // get env vars
-def thr = Thread.currentThread()
-def build = thr?.executable
-def envVarsMap = build.parent.builds[0].properties.get("envVars")
-jobName = envVarsMap['JOB_NAME']
+jobName = env['JOB_NAME']
 
 // Groovy system script is always run on jenkins master node, while the workspace is on the jenkins slave node.
 // So first get the needed files in the workspace of the upstream job on the same node where the initial job has last ran

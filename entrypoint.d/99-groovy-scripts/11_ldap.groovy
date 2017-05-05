@@ -6,7 +6,7 @@ import hudson.security.LDAPSecurityRealm;
 def instance = Jenkins.getInstance()
 def env = System.getenv()
 
-instance.authorizationStrategy = new FullControlOnceLoggedInAuthorizationStrategy() ;
+instance.authorizationStrategy = new FullControlOnceLoggedInAuthorizationStrategy();
 
 if ( Jenkins.instance.pluginManager.activePlugins.find { it.shortName == "ldap" } != null ){
   instance.securityRealm= new LDAPSecurityRealm(

@@ -5,8 +5,11 @@ import com.cloudbees.plugins.credentials.CredentialsScope;
 import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
 import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 
-import javaposse.jobdsl.plugin.JenkinsJobManagement
-import javaposse.jobdsl.dsl.DslScriptLoader
+import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition;
+import org.jenkinsci.plugins.workflow.job.WorkflowJob;
+import com.cloudbees.hudson.plugins.folder.Folder;
+
+import jenkins.model.Jenkins
 
 def env = System.getenv()
 
@@ -37,11 +40,9 @@ if (config_repo && jenkins_admin) {
     SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), sysTokenCred)
   }
 
-//  def jobDslScript = new File('/usr/share/jenkins/resources/configure.groovy').text
-//  def workspace = new File('.')
-//  def jobManagement = new JenkinsJobManagement(System.out, [:], workspace)
-//  println new DslScriptLoader(jobManagement).runScript(jobDslScript)
+  def jobDslScript = new File('/usr/share/jenkins/resources/configure.groovy').text
 
+  folder = Jenkins.instance.getItem('admin')
+  WorkflowJob job = folder.createProject(WorkflowJob, 'configure')
+  job.definition = new CpsFlowDefinition(jobDslScript, true)
 }
-
-

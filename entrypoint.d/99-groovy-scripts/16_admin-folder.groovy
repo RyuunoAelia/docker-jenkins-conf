@@ -1,22 +1,24 @@
 #!groovy
-import jenkins.model.Jenkins
-import jenkins.model.*
 import javaposse.jobdsl.dsl.DslScriptLoader
 import javaposse.jobdsl.plugin.JenkinsJobManagement
 
 def env = System.getenv()
-def user = env['JENKINS_GITHUB_USER']
 def jenkins_admin = env['JENKINS_ADMIN_GROUPNAME']
 def folder_name = 'admin'
 
+if (jenkins_admin == null) {
+  println "environment variable JENKINS_ADMIN_GROUPNAME is not set not creating admin folder"
+  return 1
+}
+
 def jobDslScript = """
 folder('${folder_name}') {
-            displayName('${folder_name}')
-            description('Admin generation jobs folder')
-            authorization {
-                permissionAll('${jenkins_admin}')
-            }
-        }
+  displayName('${folder_name}')
+  description('Admin generation jobs folder')
+  authorization {
+    permissionAll('${jenkins_admin}')
+  }
+}
 """
 def workspace = new File('.')
 def jobManagement = new JenkinsJobManagement(System.out, [:], workspace)

@@ -98,5 +98,4 @@ RUN export JENKINS_UC="http://updates.jenkins-ci.org" JENKINS_PLUGINS="$(cat /us
 USER jenkins
 
 ENTRYPOINT ["/entrypoint.sh"]
-
 WORKDIR ${JENKINS_HOME}

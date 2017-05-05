@@ -119,18 +119,3 @@ if (github_user && github_token && github_private_key) {
   }
 }
 
-def pipeline_token = env['JENKINS_GITHUB_PIPELINE_TOKEN']
-if (pipeline_token) {
-
-  def pwCredIdglob = "pipeline-library-token"
-  Credentials pwcglob = (Credentials) new UsernamePasswordCredentialsImpl(
-    CredentialsScope.GLOBAL,
-    pwCredIdglob,
-    "Read access on pipeline shared library",
-    "pipeline-library",
-    pipeline_token
-  )
-
-  println "Add Github token for pipeline library in GLOBAL scope"
-  SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), pwcglob)
-}

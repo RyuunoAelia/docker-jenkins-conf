@@ -1,6 +1,6 @@
 #!/bin/sh
 
-if [ ! -z $JENKINS_LDAP_CA_CRT ]; then
+if [ ! -z "${JENKINS_LDAP_CA_CRT}" ]; then
   # create a custom keystore location
   CUSTOM_KEYSTORE=$JENKINS_HOME/.keystore/
   mkdir -p $CUSTOM_KEYSTORE
