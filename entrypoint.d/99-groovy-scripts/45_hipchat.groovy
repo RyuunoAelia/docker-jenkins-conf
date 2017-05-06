@@ -1,9 +1,30 @@
-import jenkins.model.*;
+import jenkins.model.Jenkins;
 import java.lang.reflect.Field;
+
+import com.cloudbees.plugins.credentials.Credentials;
+import com.cloudbees.plugins.credentials.CredentialsScope;
+import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
+import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl
+
+import com.cloudbees.plugins.credentials.domains.Domain;
+import jenkins.plugins.hipchat.HipChatNotifier.DescriptorImpl;
+
+import hudson.util.Secret
 
 def env = System.getenv()
 hipchat_token = env['JENKINS_HIPCHAT_TOKEN']
 if (hipchat_token) {
+  def hipchatTextCredId = "hipchat-global-token"
+
+  println "Add HipChat token text credentials in GLOBAL scope"
+  Credentials hipchatTextc = (Credentials) new StringCredentialsImpl(
+    CredentialsScope.GLOBAL,
+    hipchatTextCredId,
+    "HipChat token for Jenkins",
+    Secret.fromString(hipchat_token)
+  )
+  SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), hipchatTextc)
+
   if ( Jenkins.instance.pluginManager.activePlugins.find { it.shortName == "hipchat" } != null ) {
     println "--> setting hipchat plugin"
 
@@ -20,7 +41,7 @@ if (hipchat_token) {
                               break
         case "server"         : f.set(descriptor, "api.hipchat.com")
                               break
-        case "credentialId"   : f.set(descriptor, "hipchat-global-token")
+        case "credentialId"   : f.set(descriptor, hipchatTextCredId)
                               break
         case "room"           : f.set(descriptor, "Jenkins CI")
                               break

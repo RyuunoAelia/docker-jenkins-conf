@@ -15,11 +15,11 @@ import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 
 def env = System.getenv()
 
-def pipeline_lib_name = env['JENKINS_PIPELINE_LIB_NAME']
 def pipeline_lib_repo = env['JENKINS_PIPELINE_LIB_REPO']
 def pipeline_username = env['JENKINS_PIPELINE_USERNAME']
 def pipeline_password = env['JENKINS_PIPELINE_PASSWORD']
 def pipeline_repo_ref = env['JENKINS_PIPELINE_REPO_REF']
+def pipeline_lib_name = 'system'
 
 if (pipeline_repo_ref == null) {
   pipeline_repo_ref = 'master'
@@ -28,11 +28,11 @@ if (pipeline_repo_ref == null) {
 def textCredId = null
 
 if (pipeline_username && pipeline_password) {
-  textCredId = "pipeline-library-creds"
+  textCredId = "system-pipeline-library-creds"
   Credentials pwcglob = (Credentials) new UsernamePasswordCredentialsImpl(
     CredentialsScope.GLOBAL,
     textCredId,
-    "Read access on pipeline shared library",
+    "Read access on system pipeline shared library repository",
     pipeline_username,
     pipeline_password
   )
@@ -41,23 +41,20 @@ if (pipeline_username && pipeline_password) {
   SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), pwcglob)
 }
 
-if (pipeline_lib_repo && pipeline_lib_name) {
+if (pipeline_lib_repo) {
   if ( Jenkins.instance.pluginManager.activePlugins.find { it.shortName == "workflow-cps-global-lib" } != null ) {
     println "--> setting shared pipeline library"
 
-    def sharedLibRepo = pipeline_lib_repo
-    def sharedLibName = pipeline_lib_name
     def credId = textCredId
-    def ref = pipeline_repo_ref
 
     def inst = Jenkins.getInstance()
     def desc = inst.getDescriptor("org.jenkinsci.plugins.workflow.libs.GlobalLibraries")
 
     GitSCMSource scm = new GitSCMSource(
-      sharedLibName,
-      sharedLibRepo,
+      pipeline_lib_name,
+      pipeline_lib_repo,
       textCredId,
-      "*/${ref}",
+      "*/${pipeline_repo_ref}",
       "",
       false
     )
@@ -65,11 +62,11 @@ if (pipeline_lib_repo && pipeline_lib_name) {
     SCMSourceRetriever retriever = new SCMSourceRetriever(scm)
 
     LibraryConfiguration libconfig = new LibraryConfiguration(
-      sharedLibName,
+      pipeline_lib_name,
       retriever
     )
 
-    libconfig.setDefaultVersion(ref)
+    libconfig.setDefaultVersion(pipeline_repo_ref)
     libconfig.setImplicit(false)
 
     desc.get().setLibraries([libconfig])
