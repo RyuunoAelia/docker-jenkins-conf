@@ -2,60 +2,87 @@
 
 import com.cloudbees.plugins.credentials.Credentials;
 import com.cloudbees.plugins.credentials.CredentialsScope;
-import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
 import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 
-import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
+import hudson.model.FreeStyleProject;
 
-import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition;
-import org.jenkinsci.plugins.workflow.job.WorkflowJob;
-import com.cloudbees.hudson.plugins.folder.Folder;
-import hudson.util.Secret
+import org.jenkinsci.plugins.scriptsecurity.sandbox.groovy.SecureGroovyScript;
+import hudson.plugins.groovy.StringSystemScriptSource;
+import hudson.plugins.groovy.SystemGroovy;
 
 import com.cloudbees.plugins.credentials.domains.Domain;
+import com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider.FolderCredentialsProperty;
+import com.cloudbees.hudson.plugins.folder.AbstractFolder;
 
-import jenkins.model.Jenkins
+import jenkins.model.Jenkins;
+
+import hudson.plugins.git.GitSCM;
+import hudson.plugins.git.BranchSpec;
+import hudson.plugins.git.SubmoduleConfig;
+import hudson.plugins.git.extensions.GitSCMExtension;
+import java.util.Collections;
+
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.GroovyLanguage;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval;
 
 def env = System.getenv()
 
 def config_repo = env['JENKINS_CONFIG_REPO']
-def config_repo_branch = env['JENKINS_CONFIG_REPO_BRANCH']
-
-def config_username = env['JENKINS_CONFIG_CHECKOUT_USERNAME']
-def config_password = env['JENKINS_CONFIG_CHECKOUT_PASSWORD']
+def config_repo_ref = env['JENKINS_CONFIG_REPO_REF']
+def config_username = env['JENKINS_CONFIG_REPO_USERNAME']
+def config_password = env['JENKINS_CONFIG_REPO_PASSWORD']
 
 if (config_repo == null) {
   println "JENKINS_CONFIG_REPO environment variable not set, not creating config repo"
   return 0
 }
 
-def configRepoPath = "system-configuration-repo"
-Credentials configRepo = (Credentials) new StringCredentialsImpl(
-  CredentialsScope.SYSTEM,
-  configRepoPath,
-  "Configuration repository Path",
-  Secret.fromString(config_repo)
-)
+folder = Jenkins.instance.getItem('admin')
+folderAbs = AbstractFolder.class.cast(folder)
+property = folderAbs.getProperties().get(FolderCredentialsProperty.class)
+if(property) {
+    property.getStore().addCredentials(Domain.global(), c)
+} else {
+    property = new FolderCredentialsProperty([])
+    folderAbs.addProperty(property)
+}
+
+credentialStore = property.getStore()
 
 def config_credid = null
 
 if (config_username && config_password) {
   config_credid = "config-checkout"
 
-  println "Add credentials for checkout of config-repo in SYSTEM scope"
+  println "Add credentials for checkout of config-repo in GLOBAL scope"
   def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
-    CredentialsScope.SYSTEM,
+    CredentialsScope.GLOBAL,
     config_credid,
     "Credentials for checkout of config-repo",
     config_username,
     config_password
   )
 
-  SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), creds)
+  credentialStore.addCredentials(Domain.global(), creds)
+} else {
+  println "No Username and Password for config repository checkout"
 }
 
 def jobDslScript = new File('/usr/share/jenkins/resources/configure.groovy').text
 
+def scm = new GitSCM(
+        GitSCM.createRepoList(config_repo, config_credid),
+        Collections.singletonList(new BranchSpec("*/${config_repo_ref}")),
+        false,
+        Collections.<SubmoduleConfig>emptyList(),
+        null,
+        null,
+	Collections.<GitSCMExtension>emptyList()
+)
+
 folder = Jenkins.instance.getItem('admin')
-WorkflowJob job = folder.createProject(WorkflowJob, 'configure')
-job.definition = new CpsFlowDefinition(jobDslScript, true)
+FreeStyleProject job = folder.createProject(FreeStyleProject, 'configure')
+builder = new SystemGroovy(new StringSystemScriptSource(new SecureGroovyScript(jobDslScript, false)))
+ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
+job.getBuildersList().add(builder)
+job.setScm(scm)

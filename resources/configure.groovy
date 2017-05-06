@@ -4,36 +4,119 @@ import hudson.model.*
 import hudson.slaves.*
 import hudson.FilePath
 
-// get env vars
-jobName = env['JOB_NAME']
+import com.cloudbees.hudson.plugins.folder.*;
+import com.cloudbees.hudson.plugins.folder.properties.*;
+import com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider.FolderCredentialsProperty
+import com.cloudbees.plugins.credentials.impl.*;
+import com.cloudbees.plugins.credentials.*;
+import com.cloudbees.plugins.credentials.domains.*;
+import hudson.util.Secret
 
-// Groovy system script is always run on jenkins master node, while the workspace is on the jenkins slave node.
-// So first get the needed files in the workspace of the upstream job on the same node where the initial job has last ran
+import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.nodes.JobRestrictionProperty;
+import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.restrictions.job.StartedByMemberOfGroupRestriction;
+import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.restrictions.job.RegexNameRestriction;
+import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.util.GroupSelector;
+import java.util.List;
+import groovy.lang.Binding;
 
-// sync utilities folder from slave on master node
-fp = new FilePath(build.workspace, ".")
-systemGroovyFolderOnMaster = "/var/jenkins_home/system_groovy"
-systemGroovyJobFolderOnMaster = "${systemGroovyFolderOnMaster}/${jobName}"
-targetDir = new File(systemGroovyJobFolderOnMaster)
-targetDir.mkdirs()
-targetDirPath = new FilePath(new File(systemGroovyJobFolderOnMaster))
-println "Adding synchronization folder ${targetDir}"
-fp.copyRecursiveTo(targetDirPath)
+def workspace = this.getBinding().getVariable("build").getWorkspace()
 
-// Read class files contents
-String folderCredentialScript = new File("${systemGroovyJobFolderOnMaster}/utilities/folderCredential.groovy").text
-String slaveNodeRestrictionScript = new File("${systemGroovyJobFolderOnMaster}/utilities/slaveNodeRestriction.groovy").text
+class slaveNodeRestriction {
 
-// Parse the script content to have the corresponding classes
-Class folderCredential = new GroovyClassLoader(getClass().getClassLoader()).parseClass(folderCredentialScript);
-Class slaveNodeRestriction = new GroovyClassLoader(getClass().getClassLoader()).parseClass(slaveNodeRestrictionScript);
+    def restrictGroupsOnNodes(
+        groupNameList,
+        nodeList
+    ){
+
+        List grouplist = new LinkedList();
+        groupNameList.each { groupName ->
+            GroupSelector  g = new GroupSelector (groupName);
+            grouplist.add(g);
+        }
+
+        StartedByMemberOfGroupRestriction startGrpRestr = new StartedByMemberOfGroupRestriction(grouplist, false );
+        JobRestrictionProperty jobrestrict = new JobRestrictionProperty(startGrpRestr);
+
+        List restrictlist = new LinkedList();
+        restrictlist.add(jobrestrict);
+
+        RetentionStrategy retStrat = new RetentionStrategy.Always()
+
+        //for (aSlave in hudson.model.Hudson.instance.slaves) {
+        hudson.model.Hudson.instance.slaves.eachWithIndex { aSlave, index ->
+            if (nodeList.contains(index+1)) {
+                aSlave.setRetentionStrategy(retStrat);
+                aSlave.setNodeProperties(restrictlist);
+                aSlave.save()
+            }
+        }
+
+    }
+
+    def restrictFoldersOnNodes(
+        folderList,
+        nodeList
+    ){
+
+        def regex = /^[${folderList.join('|')}].*/
+        RegexNameRestriction regexRestr = new RegexNameRestriction(regex, false );
+        JobRestrictionProperty jobrestrict = new JobRestrictionProperty(regexRestr);
+
+        List restrictlist = new LinkedList();
+        restrictlist.add(jobrestrict);
+
+        RetentionStrategy retStrat = new RetentionStrategy.Always()
+
+        //for (aSlave in hudson.model.Hudson.instance.slaves) {
+        hudson.model.Hudson.instance.slaves.eachWithIndex { aSlave, index ->
+            if (nodeList.contains(index+1)) {
+                aSlave.setRetentionStrategy(retStrat);
+                aSlave.setNodeProperties(restrictlist);
+                aSlave.save()
+            }
+        }
+
+    }
+}
+
+class folderCredential {
+    def addFolderUserPasswordCredential(
+            folderName,
+            credId,
+            credDesc,
+            credUser,
+            credPassword
+        ){
+
+        Credentials pwc = (Credentials) new UsernamePasswordCredentialsImpl(
+            CredentialsScope.GLOBAL,
+            credId,
+            credDesc,
+            credUser,
+            credPassword
+        )
+        def inst = Jenkins.getInstance()
+        for (folder in inst.getAllItems(Folder.class)) {
+            if(folder.name.equals(folderName)){
+                AbstractFolder<?> folderAbs = AbstractFolder.class.cast(folder)
+                FolderCredentialsProperty property = folderAbs.getProperties().get(FolderCredentialsProperty.class)
+                if(property) {
+                    property.getStore().addCredentials(Domain.global(), pwc)
+                } else {
+                    property = new FolderCredentialsProperty([pwc])
+                    folderAbs.addProperty(property)
+                }
+            }
+        }
+    }
+}
 
 // Create new instances
 GroovyObject folderCredentialInst = (GroovyObject) folderCredential.newInstance();
 GroovyObject slaveNodeRestrictionInst = (GroovyObject) slaveNodeRestriction.newInstance();
 
 // Read config files contents
-String teams = new File("${systemGroovyJobFolderOnMaster}/config/teams.list").text
+String teams = new File("${workspace}/teams.list").text
 println "-------------------- Credentials -----------------------"
 def slavesIndexHash = [:]
 teams.eachLine { line ->
@@ -79,7 +162,3 @@ slavesIndexHash.each{ k, v ->
     )
 }
 println "--------------------------------------------------------"
-
-// Cleanup
-println "Removing synchronization folder ${targetDir}"
-targetDir.deleteDir()

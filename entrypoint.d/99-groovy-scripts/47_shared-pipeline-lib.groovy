@@ -16,9 +16,9 @@ import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 def env = System.getenv()
 
 def pipeline_lib_repo = env['JENKINS_PIPELINE_LIB_REPO']
-def pipeline_username = env['JENKINS_PIPELINE_USERNAME']
-def pipeline_password = env['JENKINS_PIPELINE_PASSWORD']
-def pipeline_repo_ref = env['JENKINS_PIPELINE_REPO_REF']
+def pipeline_username = env['JENKINS_PIPELINE_LIB_REPO_USERNAME']
+def pipeline_password = env['JENKINS_PIPELINE_LIB_REPO_PASSWORD']
+def pipeline_repo_ref = env['JENKINS_PIPELINE_LIB_REPO_REF']
 def pipeline_lib_name = 'system'
 
 if (pipeline_repo_ref == null) {
