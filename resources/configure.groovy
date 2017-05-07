@@ -18,7 +18,23 @@ import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.restrictions.job.Regex
 import com.synopsys.arc.jenkinsci.plugins.jobrestrictions.util.GroupSelector;
 
 import groovy.util.ConfigSlurper;
+import hudson.security.Permission;
+import com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty;
 
+import hudson.util.Secret;
+import com.cloudbees.plugins.credentials.domains.Domain;
+import hudson.model.FreeStyleProject;
+import org.jenkinsci.plugins.scriptsecurity.sandbox.groovy.SecureGroovyScript;
+import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval;
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.GroovyLanguage;
+import hudson.plugins.groovy.StringSystemScriptSource;
+import hudson.plugins.groovy.SystemGroovy;
+import java.util.Collections;
+
+import hudson.plugins.git.GitSCM;
+import hudson.plugins.git.BranchSpec;
+import hudson.plugins.git.SubmoduleConfig;
+import hudson.plugins.git.extensions.GitSCMExtension;
 
 
 import java.io.ByteArrayOutputStream;
@@ -264,6 +280,9 @@ import java.nio.charset.StandardCharsets;
 gpg_key = null
 gpg_key_password = null
 def decipher(String cipher) {
+  if (gpg_key == null) {
+    throw new MissingPropertyException('You tried to call decrypt without setting a gpg Key')
+  }
   InputStream ciphered = new ByteArrayInputStream(cipher.getBytes(StandardCharsets.UTF_8));
   InputStream privKeyIn = new ByteArrayInputStream(gpg_key.getBytes(StandardCharsets.UTF_8))
   OutputStream plainText = new ByteArrayOutputStream()
@@ -330,9 +349,142 @@ def addFolderUserPasswordCredential(
 }
 
 def createFolderForTeam(name, ldap_group) {
+  println "creating folder for team ${name}"
+  def inst = Jenkins.getInstance()
+  def folder = inst.getItem(name)
+  // create folder if not exist
+  if (folder == null) {
+    inst.createProject(Folder, name)
+    folder = inst.getItem(name)
+  }
+
+  println "giving full access to the folder to jenkins group ${ldap_group}"
+  def folderAbs = AbstractFolder.class.cast(folder)
+  def property = folderAbs.getProperties().get(AuthorizationMatrixProperty.class)
+  // remove property if already exists
+  if(property != null) {
+    folderAbs.getProperties().remove(property)
+  }
+  property = new AuthorizationMatrixProperty(
+    [
+      (Permission.fromId('hudson.model.Item.Read')): [ldap_group],
+      (Permission.fromId('hudson.model.Item.Build')): [ldap_group],
+      (Permission.fromId('hudson.model.Item.ViewStatus')): [ldap_group],
+    ]
+  )
+  folderAbs.addProperty(property)
+}
+
+def getGitSCMObectFromDef(folder, prefix, scmdef) {
+  def credid = null
+
+  if (! scmdef.containsKey('url')) {
+    throw new MissingPropertyException('Git SCM Definition does not container url')
+  }
+  def repo_ref = "master"
+  if (scmdef.containsKey('ref')) {
+    repo_ref = scmdef.repo_ref
+  }
+
+  if (scmdef.containsKey('username') && scmdef.containsKey('password')) {
+    credid = "creds-${prefix}-checkout"
+
+    println "Repository uses Credentials"
+    def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
+      CredentialsScope.GLOBAL,
+      scmdef.url,
+      "Credentials for checkout of \"${job.getName()}\"",
+      scmdef.username,
+      scmdef.password
+    )
+
+    setCredentialInFolder(folder, creds)
+  }
+
+  def scm = new GitSCM(
+          GitSCM.createRepoList(scmdef.url, credid),
+          Collections.singletonList(new BranchSpec("*/${repo_ref}")),
+          false,
+          Collections.<SubmoduleConfig>emptyList(),
+          null,
+          null,
+          Collections.<GitSCMExtension>emptyList()
+  )
+}
+
+def setScmForJobFromDef(folder, job, idname, scmdef) {
+  if (! scmdef.containsKey('type')) {
+    throw new MissingPropertyException('Missing type for scm definition')
+  }
+  def scm = null
+  switch (scmdef.type) {
+    case "git":
+      scm = getGitSCMObectFromDef(folder, idname, scmdef)
+      break;
+    default:
+      throw new MissingPropertyException("Invalid type for scm def \"${scmdef.type}\" is not supported")
+  }
+  job.setScm(scm)
+}
+
+def setCredentialInFolder(folder, creds) {
+  folderAbs = AbstractFolder.class.cast(folder)
+  property = folderAbs.getProperties().get(FolderCredentialsProperty.class)
+  if(property) {
+      property.getStore().addCredentials(Domain.global(), creds)
+  } else {
+      property = new FolderCredentialsProperty([])
+      folderAbs.addProperty(property)
+  }
+
+  credentialStore = property.getStore()
+  credentialStore.addCredentials(Domain.global(), creds)
 }
 
 def addCredentialRefreshJob(name, credentials) {
+  def inst = Jenkins.getInstance()
+  def folder = inst.getItem(name)
+
+  FreeStyleProject job = (FreeStyleProject) folder.getItem('Refresh Credentials')
+
+  if (job == null) {
+    folder.createProject(FreeStyleProject, 'Refresh Credentials')
+    job = (FreeStyleProject) folder.getItem(FreeStyleProject, 'Refresh Credentials')
+  }
+
+  builderList = job.getBuildersList()
+  builderList.each {
+    builderList.remove(it)
+  }
+
+  def jobDslScript = """import jenkins.model.Jenkins"""
+
+  ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
+  builder = new SystemGroovy(new StringSystemScriptSource(new SecureGroovyScript(jobDslScript, false)))
+  builderList.add(builder)
+  if (credentials.containsKey('gpg_key')) {
+    println "Credentials is using a GPG key"
+    def Credentials creds = (Credentials) new StringCredentialsImpl(
+      CredentialsScope.GLOBAL,
+      'gpg-key',
+      'GPG Key to decrypt secrets in "Refresh Credentials" job',
+      Secret.fromString(credentials.gpg_key)
+    )
+    setCredentialInFolder(folder, creds)
+  }
+  if (credentials.containsKey('gpg_key_password')) {
+    println "Credentials GPG key has password"
+    def Credentials creds = (Credentials) new StringCredentialsImpl(
+      CredentialsScope.GLOBAL,
+      'gpg-key-password',
+      'GPG Key Password for "Refresh Credentials" job',
+      Secret.fromString(credentials.gpg_key_password)
+    )
+    setCredentialInFolder(folder, creds)
+  }
+  if (credentials.containsKey('scm')) {
+    setScmForJobFromDef(folder, job, 'refresh-credentials', credentials.scm)
+  }
 }
 
 def addAutoGeneratePipeline(name, scm) {
@@ -372,21 +524,13 @@ def parser = new ConfigSlurper()
 
 parser.setBinding(['decrypt':this.&decipher])
 
-def teams = [config:[:]]
-try {
-  parser.parse(new File("${workspace}/teams.config").text).config
-} catch (err) {
-  println "Failed to parse configuration file reason: ${err}"
-}
+def teams = parser.parse(new File("${workspace}/teams.config").text).config
 
 def slavesIndexHash = [:]
 
 for (Map.Entry<String, Map> entry: teams) {
   name = entry.key
-  println name
   config = entry.value
-  println name
-  println config
 
   if (! config.containsKey('scm')) {
     println "Bad Entry for team ${name} missing 'scm' entry"
