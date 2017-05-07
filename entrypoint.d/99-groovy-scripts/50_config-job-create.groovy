@@ -3,6 +3,8 @@
 import com.cloudbees.plugins.credentials.Credentials;
 import com.cloudbees.plugins.credentials.CredentialsScope;
 import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
+import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
+import hudson.util.Secret;
 
 import hudson.model.FreeStyleProject;
 
@@ -31,6 +33,9 @@ def config_repo = env['JENKINS_CONFIG_REPO']
 def config_repo_ref = env['JENKINS_CONFIG_REPO_REF']
 def config_username = env['JENKINS_CONFIG_REPO_USERNAME']
 def config_password = env['JENKINS_CONFIG_REPO_PASSWORD']
+
+def gpg_key = env['JENKINS_GPG_PRIVATE_KEY']
+def gpg_pass = env['JENKINS_GPG_PRIVATE_KEY_PASSWORD']
 
 if (config_repo == null) {
   println "JENKINS_CONFIG_REPO environment variable not set, not creating config repo"
@@ -66,6 +71,38 @@ if (config_username && config_password) {
   credentialStore.addCredentials(Domain.global(), creds)
 } else {
   println "No Username and Password for config repository checkout"
+}
+
+if (gpg_key) {
+  def gpg_credid = "gpg-key"
+
+  println "Add gpg key in GLOBAL scope"
+  def Credentials creds = (Credentials) new StringCredentialsImpl(
+    CredentialsScope.GLOBAL,
+    gpg_credid,
+    "GPG Key to decrypt secrets in config",
+    Secret.fromString(gpg_key)
+  )
+
+  credentialStore.addCredentials(Domain.global(), creds)
+} else {
+  println "No GPG Key for Secrets, consider adding one"
+}
+
+if (gpg_pass) {
+  def gpg_credid = "gpg-key-password"
+
+  println "Add gpg password for key in GLOBAL scope"
+  def Credentials creds = (Credentials) new StringCredentialsImpl(
+    CredentialsScope.GLOBAL,
+    gpg_credid,
+    "Password to unlock GPG Key secrets in config",
+    Secret.fromString(gpg_pass)
+  )
+
+  credentialStore.addCredentials(Domain.global(), creds)
+} else {
+  println "No Password for GPG Key, consider adding one"
 }
 
 def jobDslScript = new File('/usr/share/jenkins/resources/configure.groovy').text
