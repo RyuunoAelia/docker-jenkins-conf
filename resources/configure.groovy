@@ -35,7 +35,7 @@ import hudson.plugins.git.BranchSpec;
 import hudson.plugins.git.SubmoduleConfig;
 import hudson.plugins.git.extensions.GitSCMExtension;
 
-def configLoaderDef = '''
+configLoaderDef = '''
                          import java.nio.charset.StandardCharsets;
                          import groovy.util.ConfigSlurper;
                          import java.io.ByteArrayOutputStream;
@@ -77,7 +77,7 @@ def configLoaderDef = '''
 
 '''
 
-def pgpHelperDef = '''
+pgpHelperDef = '''
                        import java.io.InputStream;
                        import java.io.OutputStream;
                        import java.security.NoSuchProviderException;
@@ -337,7 +337,7 @@ def getGitSCMObectFromDef(folderManager, prefix, scmdef) {
 
     println "Repository uses Credentials"
     def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
-      CredentialsScope.GLOBAL,
+      CredentialsScope.SYSTEM,
       scmdef.url,
       "Credentials for checkout of \"${job.getName()}\"",
       scmdef.username,
@@ -376,12 +376,102 @@ def setScmForJobFromDef(folderManager, job, idname, scmdef) {
 def addCredentialRefreshJob(folderManager, credentials) {
   def job = folderManager.getOrCreateJob(FreeStyleProject, 'Refresh Credentials')
 
-  builderList = job.getBuildersList()
+  def builderList = job.getBuildersList()
   builderList.each {
     builderList.remove(it)
   }
 
-  def jobDslScript = """import jenkins.model.Jenkins"""
+  def jobDslScript = """
+import jenkins.model.Jenkins
+import com.cloudbees.plugins.credentials.Credentials;
+import com.cloudbees.plugins.credentials.CredentialsScope;
+import com.cloudbees.plugins.credentials.CredentialsProvider;
+import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
+import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
+
+// this class is injected from Admin Configuration Job
+${pgpHelperDef}
+
+// this class is injected from Admin Configuration Job
+${configLoaderDef}
+
+// this class is injected from Admin Configuration Job
+${folderManagerDef}
+
+
+def gpg_key_password = null
+def gpg_key = null
+def credentialFileName = null
+def folderManager = new FolderManager("${folderManager.getName()}")
+def credList = folderManager.getCredentials(StringCredentialsImpl.class)
+
+credList.each {
+  switch (it.id) {
+    case "gpg-key":
+      println "Found GPG key"
+      gpg_key = (String)it.secret
+      break;
+    case "gpg-key-password":
+      println "Found GPG key password"
+      gpg_key_password = (String)it.secret
+      break;
+    case "credentials-file":
+      println "Found credential File name"
+      credentialFileName = (String)it.secret
+      break;
+  }
+}
+def workspace = this.getBinding().getVariable("build").getWorkspace()
+
+def pgpHelper = new PgpHelper()
+
+def configLoader = new ConfigLoader(pgpHelper, gpg_key, gpg_key_password)
+config = configLoader.parseConfigFile("\${workspace}/\${credentialFileName}")
+
+for (Map.Entry<String, Map> cred : config) {
+  def name = cred.key
+  def values = cred.value
+
+  def type = "username-password"
+  if (values.containsKey("type")) {
+    type = values.type
+  }
+  def descr = "Credentials Automatically Added by Refresh Credentials Job"
+  if (values.containsKey("description")) {
+    descr = values.description
+  }
+
+  switch (type) {
+    case "username-password":
+      if (! (values.containsKey("username") && values.containsKey("password"))) {
+        println "Credentials \${name} must contain fields 'username' and 'password' or has wrong 'type'"
+        continue
+      }
+      def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
+        CredentialsScope.GLOBAL,
+        "\${name}",
+        "\${descr}",
+        values.username,
+        values.password
+      )
+      folderManager.setCredential(creds)
+    break
+    case "text":
+      if (! (values.containsKey("text"))) {
+        println "Credentials \${name} must contain field 'text' or has wrong 'type'"
+        continue
+      }
+      def Credentials creds = (Credentials) new StringCredentialsImpl(
+        CredentialsScope.GLOBAL,
+        "\${name}",
+        "\${descr}",
+        Secret.fromString(values.text)
+      )
+      folderManager.setCredential(creds)
+    break
+  }
+}
+"""
 
   ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
   builder = new SystemGroovy(new StringSystemScriptSource(new SecureGroovyScript(jobDslScript, false)))
@@ -389,7 +479,7 @@ def addCredentialRefreshJob(folderManager, credentials) {
   if (credentials.containsKey('gpg_key')) {
     println "Credentials is using a GPG key"
     def Credentials creds = (Credentials) new StringCredentialsImpl(
-      CredentialsScope.GLOBAL,
+      CredentialsScope.SYSTEM,
       'gpg-key',
       'GPG Key to decrypt secrets in "Refresh Credentials" job',
       Secret.fromString(credentials.gpg_key)
@@ -399,19 +489,77 @@ def addCredentialRefreshJob(folderManager, credentials) {
   if (credentials.containsKey('gpg_key_password')) {
     println "Credentials GPG key has password"
     def Credentials creds = (Credentials) new StringCredentialsImpl(
-      CredentialsScope.GLOBAL,
+      CredentialsScope.SYSTEM,
       'gpg-key-password',
       'GPG Key Password for "Refresh Credentials" job',
       Secret.fromString(credentials.gpg_key_password)
     )
     folderManager.setCredential(creds)
   }
+
+  def credentialFile = "credentials.config"
+  if (credentials.containsKey('file')) {
+    println "Credentials are present in a custom file"
+    credentialFile = credentials.file
+  }
+  def Credentials creds = (Credentials) new StringCredentialsImpl(
+    CredentialsScope.SYSTEM,
+    'credentials-file',
+    'File where to find team credentials',
+    Secret.fromString(credentialFile)
+  )
+  folderManager.setCredential(creds)
+
   if (credentials.containsKey('scm')) {
     setScmForJobFromDef(folderManager, job, 'refresh-credentials', credentials.scm)
   }
 }
 
 def addAutoGeneratePipeline(folderManager, scm) {
+  def job = folderManager.getOrCreateJob(FreeStyleProject, 'Auto-Generate Pipelines')
+
+  def builderList = job.getBuildersList()
+  builderList.each {
+    builderList.remove(it)
+  }
+  if (! scm.containsKey("type") ) {
+    println "Missing type for scm skipping"
+    return
+  }
+  switch ("${scm.type}") {
+    case "github":
+    case "gogs":
+    case "gitlab":
+      break
+  
+    default:
+      println "Unsupported scm type ${scm.type}"
+      return;
+  }
+
+  def jobDslScript = """
+import org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject;
+
+// this class is injected from Admin Configuration Job
+${folderManagerDef}
+
+def folderManager = new FolderManager("${folderManager.getName()}")
+
+switch ("${scm.type}") {
+  case "github":
+    break;
+
+  case "gogs":
+    break;
+
+  case "gitlab":
+    break;
+}
+
+  """
+  ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
+  builder = new SystemGroovy(new StringSystemScriptSource(new SecureGroovyScript(jobDslScript, false)))
+  builderList.add(builder)
 }
 
 def folderManagerClass = getClass().getClassLoader().parseClass(folderManagerDef, "FolderManager");

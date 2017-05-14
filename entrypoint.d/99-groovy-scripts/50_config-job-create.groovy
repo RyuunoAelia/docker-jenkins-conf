@@ -166,9 +166,9 @@ def config_credid = null
 if (config_username && config_password) {
   config_credid = "config-checkout"
 
-  println "Add credentials for checkout of config-repo in GLOBAL scope"
+  println "Add credentials for checkout of config-repo in SYSTEM scope"
   def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
-    CredentialsScope.GLOBAL,
+    CredentialsScope.SYSTEM,
     config_credid,
     "Credentials for checkout of config-repo",
     config_username,
@@ -183,9 +183,9 @@ if (config_username && config_password) {
 if (gpg_key) {
   def gpg_credid = "gpg-key"
 
-  println "Add gpg key in GLOBAL scope"
+  println "Add gpg key in SYSTEM scope"
   def Credentials creds = (Credentials) new StringCredentialsImpl(
-    CredentialsScope.GLOBAL,
+    CredentialsScope.SYSTEM,
     gpg_credid,
     "GPG Key to decrypt secrets in config",
     Secret.fromString(gpg_key)
@@ -199,9 +199,9 @@ if (gpg_key) {
 if (gpg_pass) {
   def gpg_credid = "gpg-key-password"
 
-  println "Add gpg password for key in GLOBAL scope"
+  println "Add gpg password for key in SYSTEM scope"
   def Credentials creds = (Credentials) new StringCredentialsImpl(
-    CredentialsScope.GLOBAL,
+    CredentialsScope.SYSTEM,
     gpg_credid,
     "Password to unlock GPG Key secrets in config",
     Secret.fromString(gpg_pass)
