@@ -1,3 +1,11 @@
+
+/*
+ * Above this comment a definition of FolderManager Class in string folderManagerDef is injected
+ * container start by stcript entrypoint.d/50_config-job-create.groovy
+ * (at runtime in $JENKINS_HOME/init.groovy.d/50_config-job-create.groovy)
+ * A definition of adminGroupName is also added containing the name of the Jenkins admin group
+ */
+
 import hudson.model.Hudson;
 import hudson.slaves.RetentionStrategy;
 
@@ -27,8 +35,47 @@ import hudson.plugins.git.BranchSpec;
 import hudson.plugins.git.SubmoduleConfig;
 import hudson.plugins.git.extensions.GitSCMExtension;
 
+def configLoaderDef = '''
+                         import java.nio.charset.StandardCharsets;
+                         import groovy.util.ConfigSlurper;
+                         import java.io.ByteArrayOutputStream;
+                         import java.io.File;
 
+                         public class ConfigLoader {
+                           Object pgpHelper = null
+                           String privateKey = null
+                           String keyPassword = null
 
+                           def ConfigLoader(aPgpHelper, aPrivateKey, aKeyPassword) {
+                             this.pgpHelper = aPgpHelper
+                             this.privateKey = aPrivateKey
+                             this.keyPassword = aKeyPassword
+                           }
+
+                           def decipher(String cipherTextString) {
+                             if (this.privateKey == null) {
+                               throw new MissingPropertyException('You tried to call decrypt without setting a gpg Key')
+                             }
+                             def cipherTextIs = new ByteArrayInputStream(cipherTextString.getBytes(StandardCharsets.UTF_8));
+                             def privKeyIn = new ByteArrayInputStream(this.privateKey.getBytes(StandardCharsets.UTF_8))
+                             def plainText = new ByteArrayOutputStream()
+                             def password = null
+                             if (this.keyPassword) {
+                               password = this.keyPassword.toCharArray()
+                             }
+                             this.pgpHelper.decryptFile(cipherTextIs, plainText, privKeyIn, password);
+                             return plainText.toString("UTF-8")
+                           }
+                           def parseConfigFile(String filePath) {
+                             // Read config files contents
+                             def parser = new ConfigSlurper()
+
+                             parser.setBinding(['decrypt':this.&decipher])
+                             return parser.parse(new File(filePath).text).config
+                           }
+                         }
+
+'''
 
 def pgpHelperDef = '''
                        import java.io.InputStream;
@@ -268,153 +315,8 @@ def pgpHelperDef = '''
                            }
 
                        }
+
 '''
-
-def configLoaderDef = '''
-                         import java.nio.charset.StandardCharsets;
-                         import groovy.util.ConfigSlurper;
-                         import java.io.ByteArrayOutputStream;
-                         import java.io.File;
-
-                         public class ConfigLoader {
-                           Object pgpHelper = null
-                           String privateKey = null
-                           String keyPassword = null
-
-                           def ConfigLoader(aPgpHelper, aPrivateKey, aKeyPassword) {
-                             this.pgpHelper = aPgpHelper
-                             this.privateKey = aPrivateKey
-                             this.keyPassword = aKeyPassword
-                           }
-
-                           def decipher(String cipherTextString) {
-                             if (this.privateKey == null) {
-                               throw new MissingPropertyException('You tried to call decrypt without setting a gpg Key')
-                             }
-                             def cipherTextIs = new ByteArrayInputStream(cipherTextString.getBytes(StandardCharsets.UTF_8));
-                             def privKeyIn = new ByteArrayInputStream(this.privateKey.getBytes(StandardCharsets.UTF_8))
-                             def plainText = new ByteArrayOutputStream()
-                             def password = null
-                             if (this.keyPassword) {
-                               password = this.keyPassword.toCharArray()
-                             }
-                             this.pgpHelper.decryptFile(cipherTextIs, plainText, privKeyIn, password);
-                             return plainText.toString("UTF-8")
-                           }
-                           def parseConfigFile(String filePath) {
-                             // Read config files contents
-                             def parser = new ConfigSlurper()
-
-                             parser.setBinding(['decrypt':this.&decipher])
-                             return parser.parse(new File(filePath).text).config
-                           }
-                         }
-'''
-
-folderManagerDef = '''
-                      import com.cloudbees.plugins.credentials.CredentialsProvider;
-                      import com.cloudbees.hudson.plugins.folder.Folder;
-                      import com.cloudbees.hudson.plugins.folder.AbstractFolder;
-                      import com.cloudbees.hudson.plugins.folder.properties.AuthorizationMatrixProperty;
-                      import hudson.security.Permission;
-                      import com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider.FolderCredentialsProperty;
-                      import com.cloudbees.plugins.credentials.domains.Domain;
-                      import jenkins.model.Jenkins;
-
-                      class FolderManager {
-
-                        String name = null
-                        Folder folder = null
-
-                        def FolderManager(name) {
-                          this.name = name
-                        }
-
-                        def getOrCreate() {
-                          if (this.folder != null) {
-                            return this.folder
-                          }
-                          def inst = Jenkins.getInstance()
-                          this.folder = inst.getItem(this.name)
-
-                          // create folder if not exist
-                          if (this.folder == null) {
-                            println "Creating folder ${this.name}"
-                            inst.createProject(Folder, this.name)
-                            this.folder = inst.getItem(this.name)
-                          }
-                          return this.folder
-                        }
-
-                        def getProperty(Class clazz) {
-                          this.getOrCreate()
-                          return AbstractFolder.class.cast(this.folder).getProperties().get(clazz)
-                        }
-
-                        def removeProperty(Class clazz) {
-                          this.getOrCreate()
-                          AbstractFolder.class.cast(this.folder).getProperties().remove(clazz)
-                        }
-
-                        def addProperty(property) {
-                          this.getOrCreate()
-                          AbstractFolder.class.cast(this.folder).addProperty(property)
-                        }
-
-                        def setPermissions(devteam) {
-			  println this.name
-			  println devteam
-                          println "Giving developper access to folder ${this.name} to jenkins group ${devteam}"
-                          def property = this.getProperty(AuthorizationMatrixProperty.class)
-
-                          // remove property if already exists
-                          if(property != null) {
-                            this.removeProperty(property.class)
-                          }
-                          property = new AuthorizationMatrixProperty(
-                            [
-                              (Permission.fromId('hudson.model.Item.Read')): [devteam],
-                              (Permission.fromId('hudson.model.Item.Build')): [devteam],
-                              (Permission.fromId('hudson.model.Item.ViewStatus')): [devteam],
-                            ]
-                          )
-                          this.addProperty(property)
-                        }
-
-                        def setCredential(creds) {
-                          println "Setting credential ${creds.id} in folder ${folder.getName()}"
-                          def property = this.getProperty(FolderCredentialsProperty.class)
-                          if(property == null) {
-                              property = new FolderCredentialsProperty([])
-                              this.addProperty(property)
-                          }
-
-                          property.getStore().addCredentials(Domain.global(), creds)
-                        }
-
-                        def getCredentials(Class clazz) {
-                          this.getOrCreate()
-                          return CredentialsProvider.lookupCredentials(
-                              clazz,
-                              this.folder,
-                              null,
-                              null
-                          )
-                        }
-
-                        def getOrCreateJob(Class clazz, String name) {
-                          this.getOrCreate()
-                          def project = this.folder.getItem(name)
-                          if (project == null) {
-                            println "Creating Job ${name} in Folder ${this.name}"
-                            this.folder.createProject(clazz, name)
-                            project = this.folder.getItem(name)
-                          }
-                          return project
-                        }
-                      }
-'''
-
 
 
 def workspace = this.getBinding().getVariable("build").getWorkspace()
@@ -556,7 +458,7 @@ for (Map.Entry<String, Map> entry: teams) {
   }
   def folderManager = folderManagerClass.newInstance(name)
 
-  folderManager.setPermissions(config.ldap_group)
+  folderManager.setPermissions(config.ldap_group, adminGroupName)
   if (config.containsKey('credentials')) {
     addCredentialRefreshJob(folderManager, config.credentials)
   }
