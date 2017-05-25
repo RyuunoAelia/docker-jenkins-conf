@@ -11,7 +11,7 @@ This Image can be used as-is without any external dependency (except for docker-
 - An LDAP server for authentication
 - Git Repositories for automatic configuration
 - An external email service
-- A Docker Volume mounted at `/var/jenkins_home` 
+- A Docker Volume mounted at `/home/jenkins` 
 - Port 8080 of the container forwarded to the host and/or a HTTPS reverse proxy.
 
 To setup correctly Jenkins it needs to know its own access URL, this can be setup using environment variable `JENKINS_ROOT_URL` for example setting it to `http://jenkins.example.com`.
