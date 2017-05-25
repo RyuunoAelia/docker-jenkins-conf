@@ -88,9 +88,6 @@ pgpHelperDef = '''
                        import java.security.Security;
                        import java.util.Iterator;
 
-                       @Grab('org.bouncycastle:bcpg-jdk15on:1.56')
-                       @Grab('org.bouncycastle:bcprov-jdk15on:1.56')
-
                        import org.bouncycastle.bcpg.ArmoredOutputStream;
                        import org.bouncycastle.jce.provider.BouncyCastleProvider;
                        import org.bouncycastle.openpgp.PGPCompressedData;
