@@ -10,11 +10,22 @@ fi
 export JENKINS_INIT_DIR=${JENKINS_HOME}/init.groovy.d
 mkdir -p ${JENKINS_INIT_DIR}
 
+echo "cleanning up additionnal jar data"
+rm -rf "${JENKINS_HOME}/additionnal/classes/"
+mkdir -p "${JENKINS_HOME}/additionnal/classes/"
+
+# this variable as its name does not explicit is the temporary folder where the plugins will be downloaded
+export REF="/tmp/ref-absurdly-long"
+mkdir -p ${REF}/plugins
+
+mkdir -p $JENKINS_HOME/plugins
+
 find /entrypoint.d -type f | sort -n |
 while read f; do
   case "$f" in
     *.sh) echo "$0: running \"$f\""; . "$f" ;;
-    *.groovy) echo "$0: (delayed) copying \"$f\" to ${JENKINS_INIT_DIR}"; cp "$f" "${JENKINS_INIT_DIR}";;
+    *.groovy) echo "$0: (delayed) copying \"$f\" to ${JENKINS_INIT_DIR}"; cp "$f" "${JENKINS_INIT_DIR}" ;;
+    *.jpi) echo "$0: copying static plugin \"$f\" to ${REF}/plugins/"; cp "$f" "${REF}"/plugins/ ;;
     *) echo "$0: ignoring $f" ;;
   esac
   echo
