@@ -30,6 +30,7 @@ folderManagerDef = '''
                       import com.cloudbees.hudson.plugins.folder.properties.FolderCredentialsProvider.FolderCredentialsProperty;
                       import com.cloudbees.plugins.credentials.domains.Domain;
                       import jenkins.model.Jenkins;
+                      import com.cloudbees.plugins.credentials.Credentials;
 
                       class FolderManager {
 
@@ -108,8 +109,13 @@ folderManagerDef = '''
                               property = new FolderCredentialsProperty([])
                               this.addProperty(property)
                           }
-
-                          property.getStore().addCredentials(Domain.global(), creds)
+                          def list = this.getCredentials(Credentials)
+                          def oldcreds = list.find { it.id == creds.id }
+                          if (oldcreds) {
+                            property.getStore().updateCredentials(Domain.global(), oldcreds, creds)
+                          } else {
+                            property.getStore().addCredentials(Domain.global(), creds)
+                          }
                         }
 
                         def getCredentials(Class clazz) {

@@ -9,7 +9,6 @@
 import hudson.model.Hudson;
 import hudson.slaves.RetentionStrategy;
 
-import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
 
 import com.cloudbees.plugins.credentials.Credentials;
@@ -71,7 +70,7 @@ configLoaderDef = '''
                              def parser = new ConfigSlurper()
 
                              parser.setBinding(['decrypt':this.&decipher])
-                             return parser.parse(new File(filePath).text).config
+                             return parser.parse(new File(filePath).text)
                            }
                          }
 
@@ -318,10 +317,105 @@ pgpHelperDef = '''
 
 '''
 
+credentialsManagerDef = """
+  import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
+  import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
+  import com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey;
+  import com.cloudbees.plugins.credentials.Credentials;
+  import com.cloudbees.plugins.credentials.CredentialsScope;
+  import hudson.util.Secret;
+
+  class CredentialsManager {
+  
+    def CredentialsManager() {
+    }
+
+    def createPassword(folderManager, name, descr, username, password) {
+      def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
+        CredentialsScope.GLOBAL,
+        name,
+        descr,
+        username,
+        password
+      )
+      folderManager.setCredential(creds)
+    }
+
+    def createToken(folderManager, name, descr, token) {
+      def Credentials creds = (Credentials) new StringCredentialsImpl(
+        CredentialsScope.GLOBAL,
+        name,
+        descr,
+        Secret.fromString(token)
+      )
+      folderManager.setCredential(creds)
+    }
+
+    def createSshPrivateKey(folderManager, name, descr, username, key, passphrase) {
+      def Credentials creds = (Credentials) new BasicSSHUserPrivateKey(
+        CredentialsScope.GLOBAL,
+        name,
+        username,
+        new BasicSSHUserPrivateKey.DirectEntryPrivateKeySource(key),
+        passphrase,
+        descr
+      )
+      folderManager.setCredential(creds)
+    }
+
+    public static get(folderManager, type, id) {
+      def typeclass = null
+      switch (type) {
+        case 'token':
+          typeclass = StringCredentialsImpl.class
+          break
+        case 'password':
+          typeclass = UsernamePasswordCredentialsImpl.class
+          break
+        case 'ssh':
+          typeclass = BasicSSHUserPrivateKey.class
+          break
+        case 'gpg-key':
+          typeclass = StringCredentialsImpl.class
+          break
+        case 'gpg-password':
+          typeclass = StringCredentialsImpl.class
+          break
+        case 'filename':
+          typeclass = StringCredentialsImpl.class
+          break
+      }
+
+      if (typeclass == null) {
+        return null
+      }
+      def allcreds = folderManager.getCredentials(typeclass)
+      return allcreds.find { it.id == id }
+    }
+  
+    def getHTTPAuthHeader(folderManager, type, id) {
+      def cred = CredentialsManager.get(folderManager, type, id)
+      if (cred == null) {
+        return null
+      }
+      switch (type) {
+        case 'password':
+          return "basic \${cred.username}:\${cred.password}".bytes.encodeBase64.toString()
+        case 'token':
+          return "token \${cred.secret}"
+      }
+      return null
+    }
+  
+  }
+
+"""
+
 
 def workspace = this.getBinding().getVariable("build").getWorkspace()
+def credentialsManager = getClass().getClassLoader().parseClass(credentialsManagerDef, "CredentialsManager").newInstance()
 
-def getGitSCMObectFromDef(folderManager, prefix, scmdef) {
+def getGitSCMObectFromDef(folderManager, credentialsManager, prefix, scmdef) {
   def credid = null
 
   if (! scmdef.containsKey('url')) {
@@ -329,26 +423,45 @@ def getGitSCMObectFromDef(folderManager, prefix, scmdef) {
   }
   def repo_ref = "master"
   if (scmdef.containsKey('ref')) {
-    repo_ref = scmdef.repo_ref
+    repo_ref = scmdef.ref
   }
-
-  if (scmdef.containsKey('username') && scmdef.containsKey('password')) {
-    credid = "creds-${prefix}-checkout"
-
-    println "Repository uses Credentials"
-    def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
-      CredentialsScope.SYSTEM,
-      scmdef.url,
-      "Credentials for checkout of \"${job.getName()}\"",
-      scmdef.username,
-      scmdef.password
-    )
-
-    folderManager.setCredential(creds)
+  def checkout_credentials_id = null
+  if (scmdef.containsKey('checkout_credentials')) {
+    if (scmdef.checkout_credentials.containsKey('type')) {
+      checkout_credentials_id = "credentials-repo-checkout-credentials"
+      checkout_credentials_descr = "Credentials to checkout credentials repository"
+      checkout_credentials_type = scmdef.checkout_credentials.type
+      switch (scmdef.checkout_credentials.type) {
+        case 'password':
+          if (! scmdef.checkout_credentials.containsKey('username')) {
+            throw new MissingPropertyException("Checkout Credentials of password type must contain username parameter");
+          }
+          if (! scmdef.checkout_credentials.containsKey('password')) {
+            throw new MissingPropertyException("Checkout Credentials of password type must contain password parameter");
+          }
+          credentialsManager.createPassword(folderManager, checkout_credentials_id, checkout_credentials_descr, scmdef.checkout_credentials.username, scmdef.checkout_credentials.password)
+        break;
+        case 'ssh':
+          def passphrase = null
+          if (! scmdef.checkout_credentials.containsKey('username')) {
+            throw new MissingPropertyException("Checkout Credentials of ssh type must contain username parameter");
+          }
+          if (! scmdef.checkout_credentials.containsKey('key')) {
+            throw new MissingPropertyException("Checkout Credentials of ssh type must contain key parameter");
+          }
+          if (scmdef.checkout_credentials.containsKey('passphrase')) {
+            passphrase = scmdef.checkout_credentials.passphrase
+          }
+          credentialsManager.createSshPrivateKey(folderManager, checkout_credentials_id, checkout_credentials_descr, scmdef.checkout_credentials.username, scmdef.checkout_credentials.key, passphrase)
+        break;
+        default:
+            throw new MissingPropertyException("Unknown type of Checkout credentials: ${scmdef.scan_credentials.type}");
+      }
+    }
   }
 
   def scm = new GitSCM(
-          GitSCM.createRepoList(scmdef.url, credid),
+          GitSCM.createRepoList(scmdef.url, checkout_credentials_id),
           Collections.singletonList(new BranchSpec("*/${repo_ref}")),
           false,
           Collections.<SubmoduleConfig>emptyList(),
@@ -358,14 +471,14 @@ def getGitSCMObectFromDef(folderManager, prefix, scmdef) {
   )
 }
 
-def setScmForJobFromDef(folderManager, job, idname, scmdef) {
+def setScmForJobFromDef(folderManager, credentialsManager, job, idname, scmdef) {
   if (! scmdef.containsKey('type')) {
     throw new MissingPropertyException('Missing type for scm definition')
   }
   def scm = null
   switch (scmdef.type) {
     case "git":
-      scm = getGitSCMObectFromDef(folderManager, idname, scmdef)
+      scm = getGitSCMObectFromDef(folderManager, credentialsManager, idname, scmdef)
       break;
     default:
       throw new MissingPropertyException("Invalid type for scm def \"${scmdef.type}\" is not supported")
@@ -373,7 +486,7 @@ def setScmForJobFromDef(folderManager, job, idname, scmdef) {
   job.setScm(scm)
 }
 
-def addCredentialRefreshJob(folderManager, credentials) {
+def addCredentialRefreshJob(folderManager, credentialsManager, credentials) {
   def job = folderManager.getOrCreateJob(FreeStyleProject, 'Refresh Credentials')
 
   def builderList = job.getBuildersList()
@@ -382,95 +495,98 @@ def addCredentialRefreshJob(folderManager, credentials) {
   }
 
   def jobDslScript = """
-import jenkins.model.Jenkins
-import com.cloudbees.plugins.credentials.Credentials;
-import com.cloudbees.plugins.credentials.CredentialsScope;
-import com.cloudbees.plugins.credentials.CredentialsProvider;
-import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
-import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
-
-// this class is injected from Admin Configuration Job
-${pgpHelperDef}
-
-// this class is injected from Admin Configuration Job
-${configLoaderDef}
-
-// this class is injected from Admin Configuration Job
-${folderManagerDef}
-
-
-def gpg_key_password = null
-def gpg_key = null
-def credentialFileName = null
-def folderManager = new FolderManager("${folderManager.getName()}")
-def credList = folderManager.getCredentials(StringCredentialsImpl.class)
-
-credList.each {
-  switch (it.id) {
-    case "gpg-key":
+    // this class is injected from Admin Configuration Job
+    ${pgpHelperDef}
+    
+    // this class is injected from Admin Configuration Job
+    ${configLoaderDef}
+    
+    // this class is injected from Admin Configuration Job
+    ${folderManagerDef}
+    
+    // this class is injected from Admin Configuration Job
+    ${credentialsManagerDef}
+    
+    
+    def gpg_key_password = null
+    def gpg_key = null
+    def credentialFileName = null
+    def folderManager = new FolderManager("${folderManager.getName()}")
+    def credList = folderManager.getCredentials(StringCredentialsImpl.class)
+    def credentialsManager = new CredentialsManager()
+    
+    def tmp = null
+    
+    tmp = credentialsManager.get(folderManager, 'gpg-key', 'gpg-key')
+    if (tmp) {
       println "Found GPG key"
-      gpg_key = (String)it.secret
-      break;
-    case "gpg-key-password":
+      gpg_key = (String)tmp.secret
+    }
+    
+    tmp = credentialsManager.get(folderManager, 'gpg-password', 'gpg-key-password')
+    if (tmp) {
       println "Found GPG key password"
-      gpg_key_password = (String)it.secret
-      break;
-    case "credentials-file":
+      gpg_key_password = (String)tmp.secret
+    }
+    
+    tmp = credentialsManager.get(folderManager, 'filename', 'credentials-file')
+    if (tmp) {
       println "Found credential File name"
-      credentialFileName = (String)it.secret
-      break;
-  }
-}
-def workspace = this.getBinding().getVariable("build").getWorkspace()
-
-def pgpHelper = new PgpHelper()
-
-def configLoader = new ConfigLoader(pgpHelper, gpg_key, gpg_key_password)
-config = configLoader.parseConfigFile("\${workspace}/\${credentialFileName}")
-
-for (Map.Entry<String, Map> cred : config) {
-  def name = cred.key
-  def values = cred.value
-
-  def type = "username-password"
-  if (values.containsKey("type")) {
-    type = values.type
-  }
-  def descr = "Credentials Automatically Added by Refresh Credentials Job"
-  if (values.containsKey("description")) {
-    descr = values.description
-  }
-
-  switch (type) {
-    case "username-password":
-      if (! (values.containsKey("username") && values.containsKey("password"))) {
-        println "Credentials \${name} must contain fields 'username' and 'password' or has wrong 'type'"
-        continue
+      credentialFileName = (String)tmp.secret
+    }
+    
+    def workspace = this.getBinding().getVariable("build").getWorkspace()
+    
+    def pgpHelper = new PgpHelper()
+    
+    def configLoader = new ConfigLoader(pgpHelper, gpg_key, gpg_key_password)
+    config = configLoader.parseConfigFile("\${workspace}/\${credentialFileName}")
+    
+    for (Map.Entry<String, Map> cred : config) {
+      def name = cred.key
+      def values = cred.value
+    
+      def type = "password"
+      if (values.containsKey("type")) {
+        type = values.type
       }
-      def Credentials creds = (Credentials) new UsernamePasswordCredentialsImpl(
-        CredentialsScope.GLOBAL,
-        "\${name}",
-        "\${descr}",
-        values.username,
-        values.password
-      )
-      folderManager.setCredential(creds)
-    break
-    case "text":
-      if (! (values.containsKey("text"))) {
-        println "Credentials \${name} must contain field 'text' or has wrong 'type'"
-        continue
+      def descr = "Credentials Automatically Added by Refresh Credentials Job"
+      if (values.containsKey("description")) {
+        descr = values.description
       }
-      def Credentials creds = (Credentials) new StringCredentialsImpl(
-        CredentialsScope.GLOBAL,
-        "\${name}",
-        "\${descr}",
-        Secret.fromString(values.text)
-      )
-      folderManager.setCredential(creds)
-    break
-  }
-}
+    
+      switch (type) {
+        case "password":
+          if (! (values.containsKey("username") && values.containsKey("password"))) {
+            println "Credentials \${name} must contain fields 'username' and 'password' or has wrong 'type'"
+            continue
+          }
+          credentialsManager.createPassword(folderManager, name, descr, values.username, values.password)
+        break
+        case "token":
+          if (! (values.containsKey("token"))) {
+            println "Credentials \${name} must contain field 'token' or has wrong 'type'"
+            continue
+          }
+          credentialsManager.createToken(foderManager, name, descr, values.token)
+        break
+        case 'ssh':
+          def passphrase = null
+          if (values.containsKey("passphrase")) {
+            passphrase = values.passphrase
+          }
+          if (! (values.containsKey("username"))) {
+            println "Credentials \${name} must contain field 'username' or has wrong 'type'"
+            continue
+          }
+          if (! (values.containsKey("key"))) {
+            println "Credentials \${name} must contain field 'key' or has wrong 'type'"
+            continue
+          }
+          credentialsManager.createSshPrivateKey(folderManager, name, descr, values.username, values.key, passphrase)
+        break
+      }
+    }
 """
 
   ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
@@ -511,11 +627,11 @@ for (Map.Entry<String, Map> cred : config) {
   folderManager.setCredential(creds)
 
   if (credentials.containsKey('scm')) {
-    setScmForJobFromDef(folderManager, job, 'refresh-credentials', credentials.scm)
+    setScmForJobFromDef(folderManager, credentialsManager, job, 'refresh-credentials', credentials.scm)
   }
 }
 
-def addAutoGeneratePipeline(folderManager, scm) {
+def addAutoGeneratePipeline(folderManager, credentialsManager, scm) {
   def job = folderManager.getOrCreateJob(FreeStyleProject, 'Auto-Generate Pipelines')
 
   def builderList = job.getBuildersList()
@@ -526,9 +642,33 @@ def addAutoGeneratePipeline(folderManager, scm) {
     println "Missing type for scm skipping"
     return
   }
+  def scm_url_val = null
+  def scm_org = null
+  def scm_team = null
   switch ("${scm.type}") {
     case "github":
+      scm_url_val = "'https://api.github.com'"
+      if (scm.containsKey('enterprise_api_url')) {
+        scm_url_val = "'${scm.enterprise_api_url}'"
+      }
+      if (scm.containsKey('org')) {
+        scm_org = "'${scm.org}'"
+      }
+      if (scm.containsKey('team')) {
+        scm_team = "'${scm.team}'"
+      }
+      break
     case "gogs":
+      if (scm.containsKey('url')) {
+        scm_url_val = "'${scm.url}'"
+      }
+      if (scm.containsKey('org')) {
+        scm_org = "'${scm.org}'"
+      }
+      if (scm.containsKey('team')) {
+        scm_team = "'${scm.team}'"
+      }
+      break
     case "gitlab":
       break
   
@@ -536,26 +676,223 @@ def addAutoGeneratePipeline(folderManager, scm) {
       println "Unsupported scm type ${scm.type}"
       return;
   }
+  def checkout_credentials_type = null
+  def scan_credentials_type = null
+  def checkout_credentials_id = 'checkout-credentials'
+  def scan_credentials_id = 'scan-credentials'
+  def checkout_credentials_descr = "Credentials to checkout '${folderManager.getName()}' repositories"
+  def scan_credentials_descr = "Credentials to scan '${folderManager.getName()}' repositories"
+
+  if (scm.containsKey('checkout_credentials')) {
+    if (scm.checkout_credentials.containsKey('type')) {
+      checkout_credentials_type = scm.checkout_credentials.type
+      switch (scm.checkout_credentials.type) {
+        case 'password':
+          if (! scm.checkout_credentials.containsKey('username')) {
+            throw new MissingPropertyException("Checkout Credentials of password type must contain username parameter");
+          }
+          if (! scm.checkout_credentials.containsKey('password')) {
+            throw new MissingPropertyException("Checkout Credentials of password type must contain password parameter");
+          }
+          credentialsManager.createPassword(folderManager, checkout_credentials_id, checkout_credentials_descr, scm.checkout_credentials.username, scm.checkout_credentials.password)
+        break;
+        case 'ssh':
+          def passphrase = null
+          if (! scm.checkout_credentials.containsKey('username')) {
+            throw new MissingPropertyException("Checkout Credentials of ssh type must contain username parameter");
+          }
+          if (! scm.checkout_credentials.containsKey('key')) {
+            throw new MissingPropertyException("Checkout Credentials of ssh type must contain key parameter");
+          }
+          if (scm.checkout_credentials.containsKey('passphrase')) {
+            passphrase = scm.checkout_credentials.passphrase
+          }
+          credentialsManager.createSshPrivateKey(folderManager, checkout_credentials_id, checkout_credentials_descr, scm.checkout_credentials.username, scm.checkout_credentials.key, passphrase)
+        break;
+        default:
+            throw new MissingPropertyException("Unknown type of Checkout credentials: ${scm.scan_credentials.type}");
+      }
+    }
+  }
+
+  if (scm.containsKey('scan_credentials')) {
+    if (scm.scan_credentials.containsKey('type')) {
+      scan_credentials_type = scm.scan_credentials.type
+      switch (scm.scan_credentials.type) {
+        case 'token':
+          if (! scm.scan_credentials.containsKey('token')) {
+            throw new MissingPropertyException("Scan Credentials of token type must contain token parameter");
+          }
+          credentialsManager.createToken(folderManager, scan_credentials_id, scan_credentials_descr, scm.scan_credentials.token)
+          break;
+        case 'password':
+          if (! scm.scan_credentials.containsKey('username')) {
+            throw new MissingPropertyException("Scan Credentials of password type must contain username parameter");
+          }
+          if (! scm.scan_credentials.containsKey('password')) {
+            throw new MissingPropertyException("Scan Credentials of password type must contain password parameter");
+          }
+          credentialsManager.createPassword(folderManager, scan_credentials_id, scan_credentials_descr, scm.scan_credentials.username, scm.scan_credentials.password)
+        break;
+        default:
+            throw new MissingPropertyException("Unknown type of Scan credentials: ${scm.scan_credentials.type}");
+      }
+    }
+  }
+
 
   def jobDslScript = """
-import org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject;
-
-// this class is injected from Admin Configuration Job
-${folderManagerDef}
-
-def folderManager = new FolderManager("${folderManager.getName()}")
-
-switch ("${scm.type}") {
-  case "github":
-    break;
-
-  case "gogs":
-    break;
-
-  case "gitlab":
-    break;
-}
-
+    import jenkins.branch.BranchSource;
+    import org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject;
+    import com.cloudbees.hudson.plugins.folder.computed.DefaultOrphanedItemStrategy;
+    import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;
+    import groovy.json.JsonSlurper;
+    import jenkins.plugins.git.GitSCMSource;
+    import org.jenkinsci.plugins.github_branch_source.GitHubSCMSource;
+    
+    // this class is injected from Admin Configuration Job
+    ${folderManagerDef}
+    
+    // this class is injected from Admin Configuration job
+    ${credentialsManagerDef}
+    
+    class GithubRepoDetector {
+      def api_url = null
+      def org = null
+      def team = null
+      def parser = null
+      def scan_credentials_id = null
+      def credentials_type = null
+      def credentialsManager = null
+      def folderManager = null
+    
+      def GithubRepoDetector(scm_api_url, scm_org, scm_team, folderManager, credentialsManager, credentials_type, scan_credentials_id) {
+        this.api_url = scm_api_url
+        this.org = scm_org
+        this.team = scm_team
+        this.folderManager = folderManager
+        this.scan_credentials_id = scan_credentials_id
+        this.credentials_type = credentials_type
+        this.credentialsManager = credentialsManager
+        this.parser = new JsonSlurper()
+      }
+    
+      def fetch(path) {
+        def url = (this.api_url + '/api/v1/' + path).toURL()
+        def requestProperties = [
+          'Accept': 'application/json',
+        ]
+        if (this.credentials_type && this.scan_credentials_id && this.credentialsManager) {
+          requestProperties['Authorization'] = this.credentialsManager.getHTTPAuthHeader(this.folderManager, this.credentials_type, this.scan_credentials_id)
+        }
+        parser.parse(url.newReader(requestProperties: requestProperties))
+      }
+    
+      def getRepos(type, checkout_credentials_id) {
+        // TODO manage paging correctly
+        def teamObject = this.fetch("orgs/\${this.org}/teams?per_page=100").find{ it.name == this.team}
+        def team_repos = this.fetch("teams/\${teamObject.id}/repos?per_page=100")
+        def file_repos = this.fetch("search/code?q=org:\${this.org}+filename:Jenkinsfile+path:/").items.findAll{ it.path == 'Jenkinsfile' }
+        def filtered = []
+        team_repos.each {
+          file_repos.each { file_repo ->
+            filtered.addAll(team_repos.findAll {
+              it.id == file_repo.id
+            })
+          }
+        }
+        def return_repos = [:]
+        filtered.each {
+          def tmp = [:]
+          tmp['scm'] = new GitHubSCMSource(it.name, this.api_url, checkout_credentials_id, this.scan_credentials_id, this.org, it.name)
+          return_repos[it.name] = tmp
+        }
+        return return_repos
+      }
+    }
+    
+    class GogsRepoDetector {
+      def api_url = null
+      def org = null
+      def team = null
+      def parser = null
+      def credentials_id = null
+      def credentials_type = null
+      def credentialsManager = null
+      def folderManager = null
+    
+      def GogsRepoDetector(api_url, scm_org, scm_team, folderManager, credentialsManager, credentials_type, credentials_id) {
+        this.api_url = api_url
+        this.org = scm_org
+        this.team = scm_team
+        this.folderManager = folderManager
+        this.credentials_id = credentials_id
+        this.credentials_type = credentials_type
+        this.credentialsManager = credentialsManager
+        this.parser = new JsonSlurper()
+      }
+    
+      def fetch(path) {
+        def url = (this.api_url + '/api/v1/' + path).toURL()
+        def requestProperties = [
+          'Accept': 'application/json',
+        ]
+        if (this.credentials_type && this.credentials_id && this.credentialsManager) {
+          requestProperties['Authorization'] = this.credentialsManager.getHTTPAuthHeader(this.folderManager, this.credentials_type, this.credentials_id)
+        }
+        parser.parse(url.newReader(requestProperties: requestProperties))
+      }
+    
+      def getRepos(type, credentialsId) {
+        //def teamObject = this.fetch("orgs/\${this.org}/teams").find{ it.name == this.team}
+        //def team_repos = this.fetch("teams/\${teamObject.id}/repos")
+        def repos = this.fetch("orgs/\${this.org}/repos")
+        // XXX impossible to filter by team repository for now...
+        def return_repos = [:]
+        repos.each {
+          def tmp = [:]
+          if (type == 'ssh') {
+            tmp['url']= it.ssh_url
+          } else {
+            tmp['url'] = it.clone_url
+          }
+          tmp['scm'] = new GitSCMSource(it.name, tmp['url'], credentialsId, "*", "", false)
+          return_repos[it.name] = tmp
+	}
+        return return_repos
+      }
+    }
+    
+    //class GitlabRepoDetector {
+    //  GitlabRepoDetector(scm) {
+    //  }
+    //}
+    
+    def credentialsManager = new CredentialsManager()
+    def folderManager = new FolderManager("${folderManager.getName()}")
+    
+    def detector = null
+    switch ("${scm.type}") {
+      case "github":
+        detector = new GithubRepoDetector(${scm_url_val}, ${scm_org}, ${scm_team}, folderManager, credentialsManager, '${scan_credentials_type}', '${scan_credentials_id}')
+        break;
+    
+      case "gogs":
+        detector = new GogsRepoDetector(${scm_url_val}, ${scm_org}, ${scm_team}, folderManager, credentialsManager, '${scan_credentials_type}', '${scan_credentials_id}')
+        break;
+    
+    //  case "gitlab":
+    //    detector = new GitlabRepoDetector(${scm_url_val}, ${scm_org}, ${scm_team}, folderManager, credentialsManager, '${scan_credentials_type}', '${scan_credentials_id}')
+    //    break;
+    }
+    
+    def repos = detector.getRepos("${checkout_credentials_type}", "${checkout_credentials_id}")
+    repos.each { name, conf ->
+      def mbpp = folderManager.getOrCreateJob(WorkflowMultiBranchProject, name)
+      mbpp.setOrphanedItemStrategy(new DefaultOrphanedItemStrategy(true, '0', '0'))
+      mbpp.getSourcesList().add(new BranchSource(conf['scm']));
+    }
+    
   """
   ScriptApproval.get().preapprove(jobDslScript, GroovyLanguage.get())
   builder = new SystemGroovy(new StringSystemScriptSource(new SecureGroovyScript(jobDslScript, false)))
@@ -608,9 +945,9 @@ for (Map.Entry<String, Map> entry: teams) {
 
   folderManager.setPermissions(config.ldap_group, adminGroupName)
   if (config.containsKey('credentials')) {
-    addCredentialRefreshJob(folderManager, config.credentials)
+    addCredentialRefreshJob(folderManager, credentialsManager, config.credentials)
   }
-  addAutoGeneratePipeline(folderManager, config.scm)
+  addAutoGeneratePipeline(folderManager, credentialsManager, config.scm)
 
   config.jenkins_slave_allocations.each {
     if (slavesIndexHash.containsKey(it)) {
