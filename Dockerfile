@@ -40,6 +40,7 @@ ENV \
   JENKINS_PLUGINS= \
   JENKINS_GPG_PRIVATE_KEY= \
   JENKINS_GPG_PRIVATE_KEY_PASSWORD= \
+  JAVA_OPTS= \
   ENTRYPOINT_DEBUG=
 
 # Jenkins is run with user `jenkins`, uid = 1000
