@@ -65,12 +65,12 @@ configLoaderDef = '''
                              this.pgpHelper.decryptFile(cipherTextIs, plainText, privKeyIn, password);
                              return plainText.toString("UTF-8")
                            }
-                           def parseConfigFile(String filePath) {
+                           def parseConfigText(String configText) {
                              // Read config files contents
                              def parser = new ConfigSlurper()
 
                              parser.setBinding(['decrypt':this.&decipher])
-                             return parser.parse(new File(filePath).text)
+                             return parser.parse(configText)
                            }
                          }
 
@@ -533,11 +533,12 @@ def addCredentialRefreshJob(folderManager, credentialsManager, credentials) {
     }
     
     def workspace = this.getBinding().getVariable("build").getWorkspace()
+    def configText = workspace.child(credentialFileName).readToString()
     
     def pgpHelper = new PgpHelper()
     
     def configLoader = new ConfigLoader(pgpHelper, gpg_key, gpg_key_password)
-    config = configLoader.parseConfigFile("\${workspace}/\${credentialFileName}")
+    config = configLoader.parseConfigText(configText)
     
     for (Map.Entry<String, Map> cred : config) {
       def name = cred.key
@@ -918,7 +919,8 @@ credList.each {
 
 def pgpHelper = getClass().getClassLoader().parseClass(pgpHelperDef, "PgpHelper").getInstance();
 def configLoader = getClass().getClassLoader().parseClass(configLoaderDef, "ConfigLoader").newInstance(pgpHelper, gpg_key, gpg_key_password);
-def teams = configLoader.parseConfigFile("${workspace}/teams.config")
+def configText = workspace.child('teams.config').readToString()
+def teams = configLoader.parseConfigText(configText)
 
 def slavesIndexHash = [:]
 
