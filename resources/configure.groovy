@@ -747,6 +747,9 @@ def addAutoGeneratePipeline(folderManager, credentialsManager, scm) {
     import groovy.json.JsonSlurper;
     import jenkins.plugins.git.GitSCMSource;
     import org.jenkinsci.plugins.github_branch_source.GitHubSCMSource;
+
+    import hudson.triggers.TimerTrigger;
+    import com.cloudbees.jenkins.GitHubPushTrigger;
     
     // this class is injected from Admin Configuration Job
     ${folderManagerDef}
@@ -804,6 +807,7 @@ def addAutoGeneratePipeline(folderManager, credentialsManager, scm) {
           def tmp = [:]
           tmp['scm'] = new GitHubSCMSource(it.name, this.api_url, checkout_credentials_id, this.scan_credentials_id, this.org, it.name)
           return_repos[it.name] = tmp
+          tmp['trigger'] = new GitHubPushTrigger()
         }
         return return_repos
       }
@@ -856,6 +860,7 @@ def addAutoGeneratePipeline(folderManager, credentialsManager, scm) {
           }
           tmp['scm'] = new GitSCMSource(it.name, tmp['url'], credentialsId, "*", "", false)
           return_repos[it.name] = tmp
+          tmp['trigger'] = new hudson.triggers.TimerTrigger('* * * * *')
 	}
         return return_repos
       }
@@ -889,6 +894,9 @@ def addAutoGeneratePipeline(folderManager, credentialsManager, scm) {
       def mbpp = folderManager.getOrCreateJob(WorkflowMultiBranchProject, name)
       mbpp.setOrphanedItemStrategy(new DefaultOrphanedItemStrategy(true, '0', '0'))
       mbpp.getSourcesList().add(new BranchSource(conf['scm']));
+      if (conf['trigger']) {
+        mbpp.addTrigger(conf['trigger'])
+      }
     }
     
   """
